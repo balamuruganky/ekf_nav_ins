@@ -8,7 +8,7 @@ message("${CMAKE_MODULE_PATH}")
 message("${EIGEN3_INCLUDE_DIR}")
 
 add_definitions(
-    -std=c++14 -O3 -Wno-deprecated -v -ftime-report
+    -std=c++17 -O3 -Wno-deprecated -v -ftime-report
     )
 
 link_directories(

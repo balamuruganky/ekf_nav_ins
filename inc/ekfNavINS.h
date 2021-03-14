@@ -29,6 +29,8 @@ Original Author: Adhika Lie
 #include <Eigen/Core>
 #include <Eigen/Dense>
 #include <tuple>
+#include <mutex>
+#include <shared_mutex>
 
 constexpr float SIG_W_A = 0.05f;
 // Std dev of gyro output noise (rad/s)
@@ -61,10 +63,37 @@ constexpr double ECC2 = 0.0066943799901;
 // earth semi-major axis radius (m)
 constexpr double EARTH_RADIUS = 6378137.0;
 
+class gpsCoordinate {
+    public:
+        double lat;
+        double lon;
+        double alt;
+};
+
+class gpsVelocity {
+    public:
+        double vN;
+        double vE;
+        double vD;
+};
+
+class imuData {
+    public:
+        float gyroX;
+        float gyroY;
+        float gyroZ;
+        float accX;
+        float accY;
+        float accZ;
+        float hX;
+        float hY;
+        float hZ;
+};
+
 class ekfNavINS {
   public:
     // ekf_update
-    void ekf_update( uint64_t time, unsigned long TOW,   /* Time, Time of the week from GPS */
+    void ekf_update( uint64_t time/*, unsigned long TOW*/,   /* Time, Time of the week from GPS */
                     double vn, double ve, double vd,    /* Velocity North, Velocity East, Velocity Down */
                     double lat, double lon, double alt, /* GPS latitude, GPS longitude, GPS/Barometer altitude */
                     float p, float q, float r,          /* Gyro P, Q and R  */
@@ -107,16 +136,23 @@ class ekfNavINS {
     float getAccelBiasZ_mss()   { return abz; }
     // return pitch, roll and yaw
     std::tuple<float,float,float> getPitchRollYaw(float ax, float ay, float az, float hx, float hy, float hz);
+    void imuUpdateEKF(uint64_t time, imuData imu);
+    void gpsCoordinateUpdateEKF(gpsCoordinate coor);
+    void gpsVelocityUpdateEKF(gpsVelocity vel);
 
   private:
     //////////////////////////////////////////////////////////////////////////////////////////////////////
     /////////////////////////////////////// member variables /////////////////////////////////////////////
     //////////////////////////////////////////////////////////////////////////////////////////////////////
+    gpsCoordinate gpsCoor;
+    gpsVelocity   gpsVel;
+    imuData       imuDat;
+    mutable std::shared_mutex shMutex;
     // initialized
     bool initialized_ = false;
     // timing
     uint64_t _tprev;
-    float _dt;
+    //float _dt;
     unsigned long previousTOW;
     // estimated attitude
     float phi, theta, psi;
@@ -230,4 +266,6 @@ class ekfNavINS {
     void update15statesAfterKF();
     // Update differece between predicted and calculated GPS and IMU values
     void updateCalculatedVsPredicted();
+    void ekf_update(uint64_t time);
+    void updateINS();
 };

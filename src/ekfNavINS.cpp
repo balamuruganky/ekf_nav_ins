@@ -69,7 +69,7 @@ void ekfNavINS::ekf_init(uint64_t time, double vn,double ve,double vd,double lat
   _tprev = time;
 }
 
-void ekfNavINS::ekf_update( uint64_t time, unsigned long TOW, double vn,double ve,double vd,double lat,double lon,double alt,
+void ekfNavINS::ekf_update( uint64_t time/*, unsigned long TOW*/, double vn,double ve,double vd,double lat,double lon,double alt,
                           float p,float q,float r,float ax,float ay,float az,float hx,float hy, float hz ) {
   if (!initialized_) {
     ekf_init(time, vn, ve, vd, lat, lon, alt, p, q, r, ax, ay, az, hx, hy, hz);
@@ -77,17 +77,11 @@ void ekfNavINS::ekf_update( uint64_t time, unsigned long TOW, double vn,double v
     initialized_ = true;
   } else {
     // get the change in time
-    _dt = ((float)(time - _tprev)) / 1e6;
-    _tprev = time;
+    float _dt = ((float)(time - _tprev)) / 1e6;
     // Update Gyro and Accelerometer biases
     updateBias(ax, ay, az, p, q, r);
-    // Update lat, lng, alt, velocity INS values to matrix
-    lla_ins(0,0) = lat_ins;
-    lla_ins(1,0) = lon_ins;
-    lla_ins(2,0) = alt_ins;
-    V_ins(0,0) = vn_ins;
-    V_ins(1,0) = ve_ins;
-    V_ins(2,0) = vd_ins;
+    // Update INS values
+    updateINS();
     // Attitude Update
     dq(0) = 1.0f;
     dq(1) = 0.5f*om_ib(0,0)*_dt;
@@ -119,20 +113,17 @@ void ekfNavINS::ekf_update( uint64_t time, unsigned long TOW, double vn,double v
     // Update process noise and covariance time
     updateProcessNoiseCovarianceTime(_dt);
     // Gps measurement update
-    if ((TOW - previousTOW) > 0) {
-      previousTOW = TOW;
+    //if ((TOW - previousTOW) > 0) {
+    if ((time - _tprev) > 0) {
+      //previousTOW = TOW;
       lla_gps(0,0) = lat;
       lla_gps(1,0) = lon;
       lla_gps(2,0) = alt;
       V_gps(0,0) = vn;
       V_gps(1,0) = ve;
       V_gps(2,0) = vd;
-      lla_ins(0,0) = lat_ins;
-      lla_ins(1,0) = lon_ins;
-      lla_ins(2,0) = alt_ins;
-      V_ins(0,0) = vn_ins;
-      V_ins(1,0) = ve_ins;
-      V_ins(2,0) = vd_ins;
+      // Update INS values
+      updateINS();
       // Create measurement Y
       updateCalculatedVsPredicted();
       // Kalman gain
@@ -143,10 +134,48 @@ void ekfNavINS::ekf_update( uint64_t time, unsigned long TOW, double vn,double v
       x = K*y;
       // Update the results
       update15statesAfterKF();
+      _tprev = time;
     }
     // Get the new Specific forces and Rotation Rate
     updateBias(ax, ay, az, p, q, r);
   }
+}
+
+void ekfNavINS::ekf_update(uint64_t time) {
+  std::shared_lock lock(shMutex);
+  ekf_update(time, /*0,*/ gpsVel.vN, gpsVel.vE, gpsVel.vD,
+                      gpsCoor.lat, gpsCoor.lon, gpsCoor.alt,
+                      imuDat.gyroX, imuDat.gyroY, imuDat.gyroZ,
+                      imuDat.accX, imuDat.accY, imuDat.accZ,
+                      imuDat.hX, imuDat.hY, imuDat.hZ);
+}
+
+void ekfNavINS::imuUpdateEKF(uint64_t time, imuData imu) {
+  {
+    std::unique_lock lock(shMutex);
+    imuDat = imu;
+  }
+  ekf_update(time);
+}
+
+void ekfNavINS::gpsCoordinateUpdateEKF(gpsCoordinate coor) {
+  std::unique_lock lock(shMutex);
+  gpsCoor = coor;
+}
+
+void ekfNavINS::gpsVelocityUpdateEKF(gpsVelocity vel) {
+  std::unique_lock lock(shMutex);
+  gpsVel = vel;
+}
+
+void ekfNavINS::updateINS() {
+  // Update lat, lng, alt, velocity INS values to matrix
+  lla_ins(0,0) = lat_ins;
+  lla_ins(1,0) = lon_ins;
+  lla_ins(2,0) = alt_ins;
+  V_ins(0,0) = vn_ins;
+  V_ins(1,0) = ve_ins;
+  V_ins(2,0) = vd_ins;
 }
 
 std::tuple<float,float,float> ekfNavINS::getPitchRollYaw(float ax, float ay, float az, float hx, float hy, float hz) {
