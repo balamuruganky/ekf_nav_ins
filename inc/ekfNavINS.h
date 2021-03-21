@@ -26,29 +26,18 @@ Original Author: Adhika Lie
 
 #include <stdint.h>
 #include <math.h>
-#include <Eigen/Core>
-#include <Eigen/Dense>
+#include <eigen3/Eigen/Core>
+#include <eigen3/Eigen/Dense>
 #include <tuple>
 #include <mutex>
 #include <shared_mutex>
-
-constexpr float SIG_W_A = 0.05f;
-// Std dev of gyro output noise (rad/s)
-constexpr float SIG_W_G = 0.00175f;
-// Std dev of Accelerometer Markov Bias
-constexpr float SIG_A_D = 0.01f;
+// ++++++++++++++++++++++++++++++++++++++++++++++++
+// error characteristics of navigation parameters
+// ++++++++++++++++++++++++++++++++++++++++++++++++
 // Correlation time or time constant
 constexpr float TAU_A = 100.0f;
-// Std dev of correlated gyro bias
-constexpr float SIG_G_D = 0.00025;
 // Correlati1on time or time constant
 constexpr float TAU_G = 50.0f;
-// GPS measurement noise std dev (m)
-constexpr float SIG_GPS_P_NE = 3.0f;
-constexpr float SIG_GPS_P_D = 6.0f;
-// GPS measurement noise std dev (m/s)
-constexpr float SIG_GPS_V_NE = 0.5f;
-constexpr float SIG_GPS_V_D = 1.0f;
 // Initial set of covariance
 constexpr float P_P_INIT = 10.0f;
 constexpr float P_V_INIT = 1.0f;
@@ -63,37 +52,96 @@ constexpr double ECC2 = 0.0066943799901;
 // earth semi-major axis radius (m)
 constexpr double EARTH_RADIUS = 6378137.0;
 
-class gpsCoordinate {
-    public:
-        double lat;
-        double lon;
-        double alt;
+struct gpsPosData {
+    uint64_t pos_time;
+    double lat;
+    double lon;
+    double alt;
+};
+using gpsPosDataPtr = std::shared_ptr<gpsPosData>;
+
+struct gpsVelData {
+    uint64_t vel_time;
+    double vN;
+    double vE;
+    double vD;
+};
+using gpsVelDataPtr = std::shared_ptr<gpsVelData>;
+
+struct imuData {
+    uint64_t imu_time;
+    float gyroX;
+    float gyroY;
+    float gyroZ;
+    float acclX;
+    float acclY;
+    float acclZ;
+};
+using imuDataPtr = std::shared_ptr<imuData>;
+
+struct magData {
+    uint64_t mag_time;
+    float hX;
+    float hY;
+    float hZ;
+};
+using magDataPtr = std::shared_ptr<magData>;
+
+struct ekfState {
+    uint64_t timestamp;
+    Eigen::Vector3d lla;       // in radians
+    // Velocities
+    Eigen::Vector3d velNED;
+    // The imu data.
+    Eigen::Matrix<float,3,1> linear;
+    Eigen::Matrix<float,3,1> angular;
+    // Eular angles
+    Eigen::Matrix<float,4,1> quat;       // Quaternion
+    Eigen::Vector3d accl_bias;  // The bias of the acceleration sensor.
+    Eigen::Vector3d gyro_bias; // The bias of the gyroscope sensor.
+    // Covariance.
+    Eigen::Matrix<float, 15, 15> cov;
 };
 
-class gpsVelocity {
-    public:
-        double vN;
-        double vE;
-        double vD;
+/*
+struct ImuData {
+    double timestamp;      // In second.
+    Eigen::Vector3d acc;   // Acceleration in m/s^2
+    Eigen::Vector3d gyro;  // Angular velocity in radian/s.
 };
+using ImuDataPtr = std::shared_ptr<ImuData>;
 
-class imuData {
-    public:
-        float gyroX;
-        float gyroY;
-        float gyroZ;
-        float accX;
-        float accY;
-        float accZ;
-        float hX;
-        float hY;
-        float hZ;
+struct MagData {
+    double timestamp;      // In second.
+    Eigen::Vector3d mag;   // All same unit. For eg. mT
 };
+using MagDataPtr = std::shared_ptr<MagData>;
+
+struct GpsPosData {
+    double timestamp;     // In second.
+    Eigen::Vector3d lla;  // Latitude in degree, longitude in degree, and altitude in meter.
+    Eigen::Matrix3d cov;  // Covariance in m^2.
+};
+using GpsPosDataPtr = std::shared_ptr<GpsPosData>;
+
+struct State {
+    double timestamp;
+    Eigen::Vector3d lla;       // WGS84 position.
+    Eigen::Vector3d acc_bias;  // The bias of the acceleration sensor.
+    Eigen::Vector3d gyro_bias; // The bias of the gyroscope sensor.
+    // Covariance.
+    Eigen::Matrix<double, 15, 15> cov;
+    // The imu data.
+    ImuDataPtr imu_data_ptr;
+    // The mag data
+    MagDataPtr mag_data_ptr;
+};
+*/
 
 class ekfNavINS {
   public:
     // ekf_update
-    void ekf_update( uint64_t time/*, unsigned long TOW*/,   /* Time, Time of the week from GPS */
+    void ekf_update(uint64_t time/*, unsigned long TOW*/,   /* Time, Time of the week from GPS */
                     double vn, double ve, double vd,    /* Velocity North, Velocity East, Velocity Down */
                     double lat, double lon, double alt, /* GPS latitude, GPS longitude, GPS/Barometer altitude */
                     float p, float q, float r,          /* Gyro P, Q and R  */
@@ -136,20 +184,54 @@ class ekfNavINS {
     float getAccelBiasZ_mss()   { return abz; }
     // return pitch, roll and yaw
     std::tuple<float,float,float> getPitchRollYaw(float ax, float ay, float az, float hx, float hy, float hz);
-    void imuUpdateEKF(uint64_t time, imuData imu);
-    void gpsCoordinateUpdateEKF(gpsCoordinate coor);
-    void gpsVelocityUpdateEKF(gpsVelocity vel);
+    //
+    // ROS
+    //
+    bool imuDataUpdateEKF(const imuDataPtr imu, ekfState* ekfOut);
+    void magDataUpdateEKF(const magDataPtr mag);
+    void gpsPosDataUpdateEKF(const gpsPosDataPtr pos);
+    void gpsVelDataUpdateEKF(const gpsVelDataPtr vel);
+    void setAcclNoise (float acclNoise) { SIG_W_A = acclNoise; }
+    void setAcclBias  (float acclBias)  { SIG_A_D = acclBias;  }
+    void setGyroNoise (float gyroNoise) { SIG_W_G = gyroNoise; }
+    void setGyroBias  (float gyroBias)  { SIG_G_D = gyroBias;  }
+    void setStdDevGpsPosNE(float stdDevGpsPosNE)    { SIG_GPS_P_NE = stdDevGpsPosNE; }
+    void setStdDevGpsPosD(float stdDevGpsPosD)      { SIG_GPS_P_D  = stdDevGpsPosD;  }
+    void setStdDevGpsVelNE(float stdDevGpsVelNE)    { SIG_GPS_V_NE = stdDevGpsVelNE; }
+    void setStdDevGpsVelD(float stdDevGpsVelD)      { SIG_GPS_V_D  = stdDevGpsVelD;  }
 
   private:
+    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    // error characteristics of navigation parameters
+    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    // Std dev of Accelerometer Wide Band Noise (m/s^2)
+    float SIG_W_A = 0.05f;
+    // Std dev of Accelerometer Markov Bias
+    float SIG_A_D = 0.01f;
+    // Std dev of gyro output noise (rad/s)
+    float SIG_W_G = 0.00175f;
+    // Std dev of correlated gyro bias
+    float SIG_G_D = 0.00025;
+    // GPS measurement noise std dev (m)
+    float SIG_GPS_P_NE = 3.0f;
+    float SIG_GPS_P_D = 6.0f;
+    // GPS measurement noise std dev (m/s)
+    float SIG_GPS_V_NE = 0.5f;
+    float SIG_GPS_V_D = 1.0f;
     //////////////////////////////////////////////////////////////////////////////////////////////////////
     /////////////////////////////////////// member variables /////////////////////////////////////////////
     //////////////////////////////////////////////////////////////////////////////////////////////////////
-    gpsCoordinate gpsCoor;
-    gpsVelocity   gpsVel;
-    imuData       imuDat;
+    gpsPosDataPtr pGpsPosDat;
+    gpsVelDataPtr pGpsVelDat;
+    imuDataPtr pImuDat;
+    magDataPtr pMagDat;
     mutable std::shared_mutex shMutex;
     // initialized
     bool initialized_ = false;
+    bool is_gps_pos_initialized = false;
+    bool is_gps_vel_initialized = false;
+    bool is_imu_initialized = false;
+    bool is_mag_initialized = false;
     // timing
     uint64_t _tprev;
     //float _dt;

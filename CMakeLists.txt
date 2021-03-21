@@ -19,7 +19,8 @@ link_directories(
 
 #INCLUDE_DIRECTORIES(${EIGEN3_INCLUDE_DIR})
 include_directories(
-    ${CMAKE_HOME_DIRECTORY}/inc
+    #${CMAKE_HOME_DIRECTORY}/inc
+    inc
     /usr/include/
     )
 
