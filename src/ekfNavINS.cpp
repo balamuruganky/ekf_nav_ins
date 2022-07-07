@@ -21,7 +21,7 @@ Addapted from earlier version
 Copyright 2011 Regents of the University of Minnesota. All rights reserved.
 Original Author: Adhika Lie
 */
-
+#include <conf.h>
 #include "ekfNavINS.h"
 
 void ekfNavINS::ekf_init(uint64_t time, double vn,double ve,double vd,double lat,double lon,double alt,float p,float q,float r,float ax,float ay,float az,float hx,float hy, float hz) {
@@ -142,56 +142,30 @@ void ekfNavINS::ekf_update( uint64_t time/*, unsigned long TOW*/, double vn,doub
 }
 
 void ekfNavINS::ekf_update(uint64_t time) {
-  std::shared_lock lock(shMutex);
-  ekf_update(time, /*0,*/ pGpsVelDat->vN, pGpsVelDat->vE, pGpsVelDat->vD,
-                      pGpsPosDat->lat, pGpsPosDat->lon, pGpsPosDat->alt,
-                      pImuDat->gyroX, pImuDat->gyroY, pImuDat->gyroZ,
-                      pImuDat->acclX, pImuDat->acclY, pImuDat->acclZ,
-                      pMagDat->hX, pMagDat->hY, pMagDat->hZ);
+  std::lock_guard<std::mutex> lck(shMutex);
+  ekf_update(time, /*0,*/ gpsVel.vN, gpsVel.vE, gpsVel.vD,
+                      gpsCoor.lat, gpsCoor.lon, gpsCoor.alt,
+                      imuDat.gyroX, imuDat.gyroY, imuDat.gyroZ,
+                      imuDat.accX, imuDat.accY, imuDat.accZ,
+                      imuDat.hX, imuDat.hY, imuDat.hZ);
 }
 
-bool ekfNavINS::imuDataUpdateEKF(const imuDataPtr imu, ekfState* ekfOut) {
+void ekfNavINS::imuUpdateEKF(uint64_t time, imuData imu) {
   {
-    std::unique_lock lock(shMutex);
-    pImuDat = imu;
-    is_imu_initialized = true;
+    std::lock_guard<std::mutex> lck(shMutex);
+    imuDat = imu;
   }
-  if (is_gps_pos_initialized && is_gps_vel_initialized && is_mag_initialized && is_imu_initialized) {
-    ekf_update(pImuDat->imu_time);
-    //
-    // Update ekf output
-    //
-    ekfOut->timestamp = pImuDat->imu_time;
-    ekfOut->lla = Eigen::Vector3d(getLatitude_rad(), getLongitude_rad(), getAltitude_m());
-    ekfOut->velNED = Eigen::Vector3d(getVelNorth_ms(), getVelEast_ms(), getVelDown_ms());
-    ekfOut->linear = f_b;
-    ekfOut->angular = om_ib;
-    ekfOut->quat = toQuaternion(getHeading_rad(), getPitch_rad(), getRoll_rad());
-    ekfOut->cov = P;
-    ekfOut->accl_bias = Eigen::Vector3d(getAccelBiasX_mss(), getAccelBiasY_mss(), getAccelBiasZ_mss());
-    ekfOut->gyro_bias = Eigen::Vector3d(getGyroBiasX_rads(), getGyroBiasY_rads(), getGyroBiasZ_rads());
-    return true;
-  } else {
-    return false;
-  }
+  ekf_update(time);
 }
 
-void ekfNavINS::magDataUpdateEKF(const magDataPtr mag) {
-  std::unique_lock lock(shMutex);
-  pMagDat = mag;
-  is_mag_initialized = true;
+void ekfNavINS::gpsCoordinateUpdateEKF(gpsCoordinate coor) {
+  std::lock_guard<std::mutex> lck(shMutex);
+  gpsCoor = coor;
 }
 
-void ekfNavINS::gpsPosDataUpdateEKF(const gpsPosDataPtr pos) {
-  std::unique_lock lock(shMutex);
-  pGpsPosDat = pos;
-  is_gps_pos_initialized = true;
-}
-
-void ekfNavINS::gpsVelDataUpdateEKF(const gpsVelDataPtr vel) {
-  std::unique_lock lock(shMutex);
-  pGpsVelDat = vel;
-  is_gps_vel_initialized = true;
+void ekfNavINS::gpsVelocityUpdateEKF(gpsVelocity vel) {
+  std::lock_guard<std::mutex> lck(shMutex);
+  gpsVel = vel;
 }
 
 void ekfNavINS::updateINS() {
@@ -217,42 +191,42 @@ std::tuple<float,float,float> ekfNavINS::getPitchRollYaw(float ax, float ay, flo
 }
 
 void ekfNavINS::updateCalculatedVsPredicted() {
-  // Position, converted to NED
-  pos_ecef_ins = lla2ecef(lla_ins);
-  pos_ecef_gps = lla2ecef(lla_gps);
-  pos_ned_gps = ecef2ned(pos_ecef_gps - pos_ecef_ins, lla_ins);
-  // Update the difference between calculated and predicted
-  y(0,0) = (float)(pos_ned_gps(0,0));
-  y(1,0) = (float)(pos_ned_gps(1,0));
-  y(2,0) = (float)(pos_ned_gps(2,0));
-  y(3,0) = (float)(V_gps(0,0) - V_ins(0,0));
-  y(4,0) = (float)(V_gps(1,0) - V_ins(1,0));
-  y(5,0) = (float)(V_gps(2,0) - V_ins(2,0));
+      // Position, converted to NED
+      pos_ecef_ins = lla2ecef(lla_ins);
+      pos_ecef_gps = lla2ecef(lla_gps);
+      pos_ned_gps = ecef2ned(pos_ecef_gps - pos_ecef_ins, lla_ins);
+      // Update the difference between calculated and predicted
+      y(0,0) = (float)(pos_ned_gps(0,0));
+      y(1,0) = (float)(pos_ned_gps(1,0));
+      y(2,0) = (float)(pos_ned_gps(2,0));
+      y(3,0) = (float)(V_gps(0,0) - V_ins(0,0));
+      y(4,0) = (float)(V_gps(1,0) - V_ins(1,0));
+      y(5,0) = (float)(V_gps(2,0) - V_ins(2,0));
 }
 
 void ekfNavINS::update15statesAfterKF() {
-  estmimated_ins = llarate ((x.block(0,0,3,1)).cast<double>(), lat_ins, alt_ins);
-  lat_ins += estmimated_ins(0,0);
-  lon_ins += estmimated_ins(1,0);
-  alt_ins += estmimated_ins(2,0);
-  vn_ins = vn_ins + x(3,0);
-  ve_ins = ve_ins + x(4,0);
-  vd_ins = vd_ins + x(5,0);
-  // Attitude correction
-  dq(0,0) = 1.0f;
-  dq(1,0) = x(6,0);
-  dq(2,0) = x(7,0);
-  dq(3,0) = x(8,0);
-  quat = qmult(quat,dq);
-  quat.normalize();
-  // obtain euler angles from quaternion
-  std::tie(phi, theta, psi) = toEulerAngles(quat);
-  abx = abx + x(9,0);
-  aby = aby + x(10,0);
-  abz = abz + x(11,0);
-  gbx = gbx + x(12,0);
-  gby = gby + x(13,0);
-  gbz = gbz + x(14,0);
+      estmimated_ins = llarate ((x.block(0,0,3,1)).cast<double>(), lat_ins, alt_ins);
+      lat_ins += estmimated_ins(0,0);
+      lon_ins += estmimated_ins(1,0);
+      alt_ins += estmimated_ins(2,0);
+      vn_ins = vn_ins + x(3,0);
+      ve_ins = ve_ins + x(4,0);
+      vd_ins = vd_ins + x(5,0);
+      // Attitude correction
+      dq(0,0) = 1.0f;
+      dq(1,0) = x(6,0);
+      dq(2,0) = x(7,0);
+      dq(3,0) = x(8,0);
+      quat = qmult(quat,dq);
+      quat.normalize();
+      // obtain euler angles from quaternion
+      std::tie(phi, theta, psi) = toEulerAngles(quat);
+      abx = abx + x(9,0);
+      aby = aby + x(10,0);
+      abz = abz + x(11,0);
+      gbx = gbx + x(12,0);
+      gby = gby + x(13,0);
+      gbz = gbz + x(14,0);
 }
 
 void ekfNavINS::updateBias(float ax,float ay,float az,float p,float q, float r) {
@@ -308,18 +282,17 @@ Eigen::Matrix<float,3,3> ekfNavINS::sk(Eigen::Matrix<float,3,1> w) {
   return C;
 }
 
-constexpr std::pair<double, double> ekfNavINS::earthradius(double lat) {
+void ekfNavINS::earthradius(double &Rew, double &Rns, double lat) {
   double denom = fabs(1.0 - (ECC2 * pow(sin(lat),2.0)));
-  double Rew = EARTH_RADIUS / sqrt(denom);
-  double Rns = EARTH_RADIUS * (1.0-ECC2) / (denom*sqrt(denom));
-  return (std::make_pair(Rew, Rns));
+  Rew = EARTH_RADIUS / sqrt(denom);
+  Rns = EARTH_RADIUS * (1.0-ECC2) / (denom*sqrt(denom));
 }
 
 // This function calculates the rate of change of latitude, longitude, and altitude.
 Eigen::Matrix<double,3,1> ekfNavINS::llarate(Eigen::Matrix<double,3,1> V,Eigen::Matrix<double,3,1> lla) {
   double Rew, Rns, denom;
   Eigen::Matrix<double,3,1> lla_dot;
-  std::tie(Rew, Rns) = earthradius(lla(0,0));
+  earthradius(Rew, Rns, lla(0,0));
   lla_dot(0,0) = V(0,0)/(Rns + lla(2,0));
   lla_dot(1,0) = V(1,0)/((Rew + lla(2,0))*cos(lla(0,0)));
   lla_dot(2,0) = -V(2,0);
@@ -337,9 +310,9 @@ Eigen::Matrix<double,3,1> ekfNavINS::llarate(Eigen::Matrix<double,3,1> V, double
 
 // This function calculates the ECEF Coordinate given the Latitude, Longitude and Altitude.
 Eigen::Matrix<double,3,1> ekfNavINS::lla2ecef(Eigen::Matrix<double,3,1> lla) {
-  double Rew, denom;
+  double Rew, Rns, denom;
   Eigen::Matrix<double,3,1> ecef;
-  std::tie(Rew, std::ignore) = earthradius(lla(0,0));
+  earthradius(Rew, Rns, lla(0,0));
   ecef(0,0) = (Rew + lla(2,0)) * cos(lla(0,0)) * cos(lla(1,0));
   ecef(1,0) = (Rew + lla(2,0)) * cos(lla(0,0)) * sin(lla(1,0));
   ecef(2,0) = (Rew * (1.0 - ECC2) + lla(2,0)) * sin(lla(0,0));
